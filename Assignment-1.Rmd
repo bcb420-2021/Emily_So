@@ -1,0 +1,372 @@
+---
+title: "BCB420 Assignment"
+author: Emily So 
+output:
+  html_document:
+    df_print: paged
+    toc: true
+---
+
+
+# Install all necessary packages for this assignment 
+```{r packages, message=FALSE}
+if (!requireNamespace("GEOmetadb", quietly = TRUE))
+    install.packages("GEOmetadb")
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+if (!requireNamespace("dplyr", quietly = TRUE))
+    install.packages("dplyr")
+if (!requireNamespace("edgeR", quietly = TRUE))
+    install.packages("edgeR")
+if (!requireNamespace("biomaRt", quietly = TRUE))
+    install.packages("biomaRt")
+library(GEOmetadb)
+library(GEOquery)
+library(dplyr)
+library(edgeR)
+library(knitr)
+library(biomaRt)
+```
+  
+  
+# Import GSE Series into notebok
+
+  The first step is to import the dataset from the chosen expression dataset  into the notebook.  
+  
+  The dataset that I have selected analyzed the differences in gene expression between healthy controls and individuals with 22q11.2 Deletion syndrome. 22q11.2 DS is a a genetic mutation that significantly increases the risk of schizophrenia, schizoaffective disorder and Autism Spectrum Disorder^1^.
+  
+  The reason that I chose this dataset was because of my recent interest in computational neuroscience. I am currently in a research position at Princess Margaret Cancer Centre, in which I am currently analyzing how EEG signals can be used to as a diagnostic tool for neurological disorders. Through this experience, I have realized how the complex structure of the brain makes it incredibly difficult to understand the molecular mechanisms behind certain neurological phenotypes.  By analyzing the differential expression between affected individuals and healthy controls, such as in this dataset, the genetic correlation can be further understood. This will allow improvement in identifying therapeutic targets for treatment.  
+  
+  The following step was taken from the RPR coding style examples from the Department of Biochemistry^2^.  
+  
+```{r import, message=FALSE}
+if (! exists("GSE46562")) {
+gse <- getGEO("GSE46562", GSEMatrix = FALSE)
+}
+data.frame(head(Meta(gse)))
+
+```
+
+# Get more information on platform of experiment
+
+```{r info, message=FALSE}
+currentGpl <- names(GPLList(gse))[1]
+currentGplInfo <- Meta(getGEO(currentGpl))
+```
+**Name of Platform:** `r currentGplInfo$title`
+
+**Submission Data Date:** `r currentGplInfo$submission_date`
+
+**Last Date Data was Updated:** `r currentGplInfo$last_update_date`
+
+**Organisms Included in Platform:** `r currentGplInfo$organism`
+
+**Quantity of GEO datasets that use this Platform:** `r length(currentGplInfo$series_id)`
+
+**Quantity of GEO samples that use this Platform:** `r length(currentGplInfo$sample_id)`
+
+# Overview Statistics 
+
+```{r supps}
+# get the expression data 
+sfiles = getGEOSuppFiles('GSE46562')
+fnames = rownames(sfiles)
+expression = read.delim(fnames[1],header = TRUE,check.names = FALSE)
+dim(expression)
+```
+The expression data consisted of measuring expression of `r nrow(expression)` genes across 19 samples (9 control cells and 10 patient cells)
+
+
+## Define Groups 
+
+  Before the study condition groups could be defined in a dataframe, I found a syntax error in the expression dataset. Some of the control cells are labeled as "iPSC2","iPSC3" and so on. The column header denoting to control sample 1 was written as "iPS1" instead of "iPSC1" like the others. Therefore, I had to fix the name of both the original sample and its duplicate. 
+```{r syntax}
+colnames(expression)[4] = "iPSC1_dup"
+colnames(expression)[6] = "iPSC1"
+```
+
+  I now wanted to be able to differentiate patients between controls and experimental (expressed as patient samples in the dataset). There was no consistent pattern that I could find in which patient and control samples were labeled. Therefore, I performed a series of regexes to sort the samples into the two respective groups: patient samples and control samples. Duplicates were included in their correct groups.  
+```{r groups}
+#expression data is 15417 genes x 20 samples. 
+#define the groups 
+makeGroupDataframe <- function(patterns,label) {
+subs <- colnames(expression)[grep(colnames(expression),pattern=patterns)]
+total <- data.frame(lapply(subs,
+                                       function(x){unlist(strsplit(x,"\\.sam"))[c(1,2)]}))
+labels = c()
+labels <- lapply(total[2,], function(x){append(labels,label)})
+total[2,] = labels
+return(total)
+}
+samples <- makeGroupDataframe("iPSC[0-9]","control sample")
+columns <- colnames(expression)[grep(colnames(expression),pattern="iPSC[0-9]")]
+samples <-data.frame(samples, makeGroupDataframe("^[^2]+[0-9+]C[245]","control sample"))
+columns <-append(columns,colnames(expression)[grep(colnames(expression),pattern="^[^2]+[0-9+]C[245]")])
+samples <-data.frame(samples,makeGroupDataframe("22q11[0-9]+C*[0-9]*","patient sample"))
+columns <-append(columns,colnames(expression)[grep(colnames(expression),pattern="22q11[0-9]+C*[0-9]*")])
+samples <-data.frame(samples,makeGroupDataframe("12[0-9]+C[29]","patient sample"))
+columns <-append(columns,colnames(expression)[grep(colnames(expression),pattern="12[0-9]+C[29]")])
+samples <-data.frame(samples,makeGroupDataframe("^[15][83][07]4?","patient sample"))
+columns <-append(columns,colnames(expression)[grep(colnames(expression),pattern="^[15][83][07]4?")])
+colnames(samples) <- c(columns)
+rownames(samples) <- c("Patient number","group")
+samples <-data.frame(t(samples))
+```
+```{r}
+head(samples)
+```
+
+## Visualizations 
+
+  I'm going to create various visualizations to assess the initial data. I discovered that the gene expression counts in the supplementary file had already been normalized via FPKM, therefore I don't anticipate for there to be a large number of drastic outliers.  
+```{r images,fig.cap="Fig 1: The distribution of the original data"}
+#distribution 
+countDensity <- apply(log2(cpm(expression[,2:20])), 2, density)
+xlim <- 0; ylim <- 0
+for (i in 1:length(countDensity)) {
+  xlim <- range(c(xlim,countDensity[[i]]$x));
+  ylim <- range(c(ylim,countDensity[[i]]$y))
+}
+
+cols <- rainbow(length(countDensity))
+ltys <- rep(1,length(countDensity))
+
+plot(countDensity[[1]],xlim=xlim,ylim=ylim,type="n",
+     ylab="Smoothing density of log2-CPM",main = "",cex.lab=0.85)
+
+for (i in 1:length(countDensity)) lines(countDensity[[i]],col=cols[i],lty=ltys[i])
+
+
+```
+
+```{r boxplot, warning=FALSE, fig.cap=" Fig 2: The boxplot of the original data"}
+#boxplot 
+originalData2Plot <- log2(expression[2:20])
+boxplot(originalData2Plot,las=2)
+```
+
+```{r bcv, fig.cap="Fig 3: The MDS plot showing the clustering of expression values among samples"}
+#BCV plot 
+matrix = as.matrix(expression[,2:20])
+rownames(matrix) <- expression$ensembl_gene_id
+
+list = DGEList(counts=matrix,group=samples$Patient.number)
+
+list = calcNormFactors(list)
+counts <- cpm(list)
+plotMDS(list,labels = rownames(samples),
+        col = c("red","blue")[factor(samples$group)])
+```
+```{r,fig.cap="Fig 4: The BCV plot to measure the variance within the original data"}
+#BCV
+ModelDesign <- model.matrix(~samples$group)
+d <- estimateDisp(list,ModelDesign)
+plotBCV(d,col.tagwise = "black",col.common = "red")
+```
+
+
+# Identifer Mapping 
+
+  The original formatting of the Ensembl gene ids were with the version number accompanied. However, in the process of doing this assignment, I realized that the biomaRt Ensembl database was not compatible with the provided identifiers and I elected to remove the version numbers for the time being. I will continue to investigate what format is required for the version numbers to map to HUGO symbols. 
+
+```{r extract-ensembl, echo=FALSE}
+ids <- expression$`ENSEML_ID|biotype|symbol`
+newer_ensembl <- unlist(lapply(ids, function(x){unlist(strsplit(x,split="|",fixed = TRUE))[c(1)]}))
+newest_ensembl <- unlist(lapply(ids, function(x){unlist(strsplit(x,split=".",fixed = TRUE))[c(1)]}))
+functions <- unlist(lapply(ids, function(x){unlist(strsplit(x,split="|",fixed = TRUE))[c(2)]}))
+proteinInfo <- data.frame(ensembl_gene_id=newest_ensembl,role=functions)
+expression$`ENSEML_ID|biotype|symbol` = proteinInfo$ensembl_gene_id
+names(expression)[names(expression)=="ENSEML_ID|biotype|symbol"] <- "ensembl_gene_id"
+head(expression[1:7])
+```
+
+```{r identifiers}
+ensembl <- useMart("ensembl")
+ensembl = useDataset("hsapiens_gene_ensembl",mart=ensembl)
+
+#attributes: Ensembl gene IDs and HUGO symbols
+#filters: Ensembl gene IDs
+#filters the ensembl gene Ids in the character vector `new_ensembl
+convertSave <- "identityConversion.rds"
+expressionConversion <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                               filters = c("ensembl_gene_id"),
+                               values = expression$ensembl_gene_id,
+                               mart=ensembl)
+saveRDS(expressionConversion,convertSave)
+#only about 3% of the data didn't map to identifiers. 
+# for the proteins that do not have a HUGO symbol, locate their role 
+expressionConversion <- expressionConversion[-which(expressionConversion$hgnc_symbol == ""),]
+
+symbols <- expressionConversion$hgnc_symbol
+head(expressionConversion)
+```
+
+
+
+## Identifying missing symbols
+
+To identify missing identifier mappings, I created the dataframe missingGenes, which contained every Ensembl Gene ID that did not map to an HUGO symbol and their respective role.
+
+
+```{r missing-genes, message=FALSE}
+expressionAnnotated<-full_join(expression,expressionConversion)
+expr <- data.frame(ensembl_gene_id=expressionAnnotated$ensembl_gene_id[which(is.na(expressionAnnotated$hgnc_symbol))])
+role <- data.frame(ensembl_gene_id=proteinInfo$ensembl_gene_id,role=proteinInfo$role)
+missingGenes <- left_join(expr,role)
+head(missingGenes)
+```
+`r nrow(missingGenes)` Ensembl Gene IDs, or `r nrow(missingGenes)/nrow(expressionAnnotated)*100` percent of expression values, do not map to HUGO symbols.  
+
+I will have to further investigate these missing genes as a large portion of them to seem to be protein-coding and could be important for differential expression, I will have to determine a way to include them in further dataframes. 
+
+## Checking for duplicates 
+
+```{r duplicate-symbols}
+length(unique(expressionConversion$ensembl_gene_id)) == length(expressionConversion$ensembl_gene_id)
+length(unique(expressionConversion$hgnc_symbol)) == length(expressionConversion$hgnc_symbol)
+```
+  There were fortunately no Ensembl Gene IDs that mapped to multiple HUGO symbols and vice versa. While I am concerned about the large percentage of unmapped expression values, I will be doing further investigation as to how that will affect downstream analysis.  
+
+# Outliers
+  
+## Filter out duplicates and low counts
+
+  I began by searching if there were any genes that were counted twice in the dataset.
+```{r duplicates}
+
+#find the summarized counts 
+uniqueEnsembl <- unique(expression$ensembl_gene_id)
+ensembl <- expression$ensembl_gene_id
+```
+  The difference in length between the uniqueEnsembl and the full vector of expression$ensembl_gene_id is `r length(ensembl)-length(uniqueEnsembl)`, there are no duplicates.  
+
+  I will now filter out low expressed genes. When filtering out low counts, the key is to be only keep the genes that have at least one counts per million within the smallest sample group size. The smallest group size is the controls, with 9 total samples (7 and two duplicates). When accounting for the smallest sample size, I will be ignoring duplicates. Therefore, we are looking for genes that have at least 1 count per million at least 7 times.  
+```{r outliers}
+counts <- cpm(expressionAnnotated[,2:20])
+rownames(counts) <- expressionAnnotated[,1]
+
+keep = rowSums(counts > 1) >= 7
+filteredAnnotated = expressionAnnotated[keep,]
+
+
+```
+  When filtering out low counts,`r nrow(expression) - nrow(filteredAnnotated)` outliers were removed.  
+
+
+# Normalization
+
+## Choosing the Correct Method
+  As I mentioned before, the data has already been normalized using FPKM, which is similar to total-count normalization. However, out of interest, I decided to apply TMM normalization as it will build on the FPKM applied by adding cross-sample scaling.^3^
+```{r normalized}
+filteredMatrix <- as.matrix(filteredAnnotated[,2:20])
+rownames(filteredMatrix) <- filteredAnnotated$ensemble_gene_id
+d = DGEList(counts=filteredMatrix,group=samples$Patient.number)
+#calculate normalization factors
+d=calcNormFactors(d)
+normalizedCounts <- cpm(d)
+normalizedDf <- cbind(ensembl_gene_id = filteredAnnotated$ensembl_gene_id, HUGO = filteredAnnotated$hgnc_symbol, as.data.frame(normalizedCounts))
+```
+
+## Recomputing Visalizations
+
+  After performing data cleaning and normalization, I'm  going to regenerate the visualizations that I did earlier to see the difference after removing the low counts. 
+```{r normalizedimages,fig.cap="Fig 5: The distribution of the data after normalization and filtering"}
+#distribution 
+countDensity <- apply(log2(cpm(normalizedDf[,3:21])), 2, density)
+xlim <- 0; ylim <- 0
+for (i in 1:length(countDensity)) {
+  xlim <- range(c(xlim,countDensity[[i]]$x));
+  ylim <- range(c(ylim,countDensity[[i]]$y))
+}
+
+cols <- rainbow(length(countDensity))
+ltys <- rep(1,length(countDensity))
+
+plot(countDensity[[1]],xlim=xlim,ylim=ylim,type="n",
+     ylab="Smoothing density of log2-CPM",main = "",cex.lab=0.85)
+
+for (i in 1:length(countDensity)) lines(countDensity[[i]],col=cols[i],lty=ltys[i])
+```
+
+```{r normboxplot, warning=FALSE,fig.cap="Fig 6: The boxplot of the normalized filtered data"}
+#boxplot 
+NewData2Plot <- log2(normalizedDf[3:21])
+
+boxplot(NewData2Plot,las=2)
+```
+
+```{r normBCV,fig.cap="Fig 7: The clustering of the normalized filtered data"}
+matrix = as.matrix(normalizedDf[,3:21])
+rownames(matrix) <- normalizedDf$ensembl_gene_id
+
+list = DGEList(counts=matrix,group=samples$Patient.number)
+
+list = calcNormFactors(list)
+counts <- cpm(list)
+plotMDS(list,labels = rownames(samples),
+        col = c("red","blue")[factor(samples$group)])
+```
+```{r, fig.cap="Fig 8: The BCV plot demonstrating the variance in the data after filtering and normalization"}
+#BCV
+ModelDesign <- model.matrix(~samples$group)
+d <- estimateDisp(list,ModelDesign)
+plotBCV(d,col.tagwise = "black",col.common = "red")
+
+```
+
+While there may not be a large shift from the raw to normalized data in visualizations, I investigated and the data values did in fact change through the process as the dataframes are not equal 
+```{r}
+identical(filteredAnnotated[2:20],normalizedDf[3:21])
+```
+
+  
+# Creating the Final Dataset
+
+  For now, I will be removing the Ensembl gene rows that do not have a unique HUGO gene symbol. The final dataset that is displayed is the normalized gene expression across all samples, with the rownames being the corresponding HUGO symbol.  
+```{r final}
+#rownames(normalizedDf) = normalizedAnnotated$hgnc_symbol
+normalizedAnnotated <- normalizedDf[-which(is.na(normalizedDf$HUGO)),]
+symbols <- normalizedAnnotated$HUGO
+rownames(normalizedAnnotated) <- symbols
+normalizedAnnotated <- subset(normalizedAnnotated,select = -c(HUGO,ensembl_gene_id))
+normalizedAnnotated[1:10,1:7]
+dim(normalizedAnnotated)
+```
+# Interpretation 
+
+### What are the control and test conditions of the dataset?\
+
+* The control and test conditions are separated into two separate groups: individuals without 22q11.2 deletion syndrome (7 iPSC cells and 2 duplicates) and individual who do have 22q11.2 deletion syndrome, resulting in either schizophrenia or schizoaffective disorder (8 iPSC cells and 2 duplicates)\
+    
+### Why is the dataset of interest to you?\
+
+* The reason that I chose this dataset was because of my recent interest in computational neuroscience. I am currently in a research position at Princess Margaret Cancer Centre, in which I am currently analyzing how EEG signals can be used to as a diagnostic tool for neurological disorders. Through this experience, I have realized how the complex structure of the brain makes it incredibly difficult to understand the molecular mechanisms behind certain neurological phenotypes.  By analyzing the differential expression between affected individuals and healthy controls, such as in this dataset, the genetic correlation can be further understood. This will allow improvement in identifying therapeutic targets for treatment. 
+    
+### Were there expression values that were not unique for specific genes? How did you handle these?\
+
+* All the expression values (Ensembl Gene IDs) in the initial dataset were unique.
+
+### Were there expression values that could not be mapped to current HUGO symbols?\
+
+* Yes. There were `r nrow(missingGenes)` ensembl ids that did not map to HUGO symbols. I chose to remove them from the final dataset for the time being.
+    
+### How many outliers were removed?\
+
+* During filtering I removed `r nrow(expression) - nrow(filteredAnnotated)` genes.
+    
+### How did you handle replicates?\
+
+* I did not have any replicates in any step of this assignment therefore I did not face this issue. 
+    
+### What is the final coverage of your dataset?\
+
+* After removing `r nrow(expression) - nrow(filteredAnnotated)` genes with low counts and removing `r nrow(missingGenes)` genes that did not map to HUGO symbols , the final coverage is `r nrow(normalizedAnnotated)` genes across 19 samples.  
+
+# Citations
+
+1. Lin, M., Pedrosa, E., Hrabovsky, A. et al. Integrative transcriptome network analysis of iPSC-derived neurons from schizophrenia and schizoaffective disorder patients with 22q11.2 deletion. BMC Syst Biol 10, 105 (2016). https://doi.org/10.1186/s12918-016-0366-0. 
+
+2. Steipe, B. (2017, August 05). Rpr-coding style. Retrieved February 20, 2021, from http://steipe.biochemistry.utoronto.ca/abc/index.php/RPR-Coding_style. 
+
+3. Robinson, M.D., Oshlack, A. A scaling normalization method for differential expression analysis of RNA-seq data. Genome Biol 11, R25 (2010). https://doi.org/10.1186/gb-2010-11-3-r25
+
