@@ -5,3 +5,5 @@
 
 ## Homework:
 [Homework 1: March 2nd 2021](https://github.com/bcb420-2021/Emily_So/wiki/Homework-March-2nd)
+
+[Homework 2: March 9th 2021](https://github.com/bcb420-2021/Emily_So/wiki/Homework-March-9th)
