@@ -20,12 +20,17 @@ if (!requireNamespace("edgeR", quietly = TRUE))
     install.packages("edgeR")
 if (!requireNamespace("biomaRt", quietly = TRUE))
     install.packages("biomaRt")
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+if (!requireNamespace("kableExtra", quietly = TRUE))
+    install.packages("kableExtra")
 library(GEOmetadb)
 library(GEOquery)
 library(dplyr)
 library(edgeR)
 library(knitr)
 library(biomaRt)
+library(kableExtra)
 ```
   
   
@@ -43,7 +48,9 @@ library(biomaRt)
 if (! exists("GSE46562")) {
 gse <- getGEO("GSE46562", GSEMatrix = FALSE)
 }
-data.frame(head(Meta(gse)))
+data.frame(head(Meta(gse))) %>%
+  kable(format = "html",caption = "Fig 1: Initial information about the dataset") %>%
+  kable_styling()
 
 ```
 
@@ -67,6 +74,8 @@ currentGplInfo <- Meta(getGEO(currentGpl))
 
 # Overview Statistics 
 
+First I had to obtain the expression dataset from the supplementary file of the study.  
+
 ```{r supps}
 # get the expression data 
 sfiles = getGEOSuppFiles('GSE46562')
@@ -79,13 +88,13 @@ The expression data consisted of measuring expression of `r nrow(expression)` ge
 
 ## Define Groups 
 
-  Before the study condition groups could be defined in a dataframe, I found a syntax error in the expression dataset. Some of the control cells are labeled as "iPSC2","iPSC3" and so on. The column header denoting to control sample 1 was written as "iPS1" instead of "iPSC1" like the others. Therefore, I had to fix the name of both the original sample and its duplicate. 
+  Before I could sort the participants into control and test groups, I found a syntax error in the expression dataset. Some of the control cells are labeled as "iPSC2","iPSC3" and so on. The column header denoting to control sample 1 was written as "iPS1" instead of "iPSC1" like the others. Therefore, I had to fix the name of both the original sample and its duplicate. 
 ```{r syntax}
 colnames(expression)[4] = "iPSC1_dup"
 colnames(expression)[6] = "iPSC1"
 ```
 
-  I now wanted to be able to differentiate patients between controls and experimental (expressed as patient samples in the dataset). There was no consistent pattern that I could find in which patient and control samples were labeled. Therefore, I performed a series of regexes to sort the samples into the two respective groups: patient samples and control samples. Duplicates were included in their correct groups.  
+  I now wanted to be able to differentiate patients between controls and test (expressed as patient samples in the dataset). There was no consistent pattern that I could find in which patient and control samples were labeled. Therefore, I performed a series of regexes to sort the samples into the two respective groups: patient samples and control samples. Duplicates were included in their correct groups.  
 ```{r groups}
 #expression data is 15417 genes x 20 samples. 
 #define the groups 
@@ -112,14 +121,16 @@ colnames(samples) <- c(columns)
 rownames(samples) <- c("Patient number","group")
 samples <-data.frame(t(samples))
 ```
-```{r}
-head(samples)
+```{r, echo=FALSE}
+head(samples) %>%
+  kable(format = "html",caption = "Fig 2: The dataframe denoting the sample groups") %>%
+  kable_styling()
 ```
 
 ## Visualizations 
 
   I'm going to create various visualizations to assess the initial data. I discovered that the gene expression counts in the supplementary file had already been normalized via FPKM, therefore I don't anticipate for there to be a large number of drastic outliers.  
-```{r images,fig.cap="Fig 1: The distribution of the original data"}
+```{r images,fig.cap="Fig 3: The distribution of the original data"}
 #distribution 
 countDensity <- apply(log2(cpm(expression[,2:20])), 2, density)
 xlim <- 0; ylim <- 0
@@ -139,13 +150,13 @@ for (i in 1:length(countDensity)) lines(countDensity[[i]],col=cols[i],lty=ltys[i
 
 ```
 
-```{r boxplot, warning=FALSE, fig.cap=" Fig 2: The boxplot of the original data"}
+```{r boxplot, warning=FALSE, fig.cap=" Fig 4: The boxplot of the original data"}
 #boxplot 
 originalData2Plot <- log2(expression[2:20])
 boxplot(originalData2Plot,las=2)
 ```
 
-```{r bcv, fig.cap="Fig 3: The MDS plot showing the clustering of expression values among samples"}
+```{r bcv, fig.cap="Fig 5: The MDS plot showing the clustering of expression values among samples"}
 #BCV plot 
 matrix = as.matrix(expression[,2:20])
 rownames(matrix) <- expression$ensembl_gene_id
@@ -157,7 +168,7 @@ counts <- cpm(list)
 plotMDS(list,labels = rownames(samples),
         col = c("red","blue")[factor(samples$group)])
 ```
-```{r,fig.cap="Fig 4: The BCV plot to measure the variance within the original data"}
+```{r,fig.cap="Fig 6: The BCV plot to measure the variance within the original data"}
 #BCV
 ModelDesign <- model.matrix(~samples$group)
 d <- estimateDisp(list,ModelDesign)
@@ -177,7 +188,11 @@ functions <- unlist(lapply(ids, function(x){unlist(strsplit(x,split="|",fixed = 
 proteinInfo <- data.frame(ensembl_gene_id=newest_ensembl,role=functions)
 expression$`ENSEML_ID|biotype|symbol` = proteinInfo$ensembl_gene_id
 names(expression)[names(expression)=="ENSEML_ID|biotype|symbol"] <- "ensembl_gene_id"
-head(expression[1:7])
+```
+```{r,echo=FALSE}
+head(expression[1:7]) %>%
+  kable(format = "html",caption = "Fig 7: Dataframe with the fixed ensembl column") %>%
+  kable_styling()
 ```
 
 ```{r identifiers}
@@ -198,7 +213,11 @@ saveRDS(expressionConversion,convertSave)
 expressionConversion <- expressionConversion[-which(expressionConversion$hgnc_symbol == ""),]
 
 symbols <- expressionConversion$hgnc_symbol
-head(expressionConversion)
+```
+```{r echo=FALSE}
+head(expressionConversion) %>%
+  kable(format = "html",caption = "Fig 8: Ensembl gene IDs and their mapped HUGO symbols") %>%
+  kable_styling()
 ```
 
 
@@ -213,7 +232,11 @@ expressionAnnotated<-full_join(expression,expressionConversion)
 expr <- data.frame(ensembl_gene_id=expressionAnnotated$ensembl_gene_id[which(is.na(expressionAnnotated$hgnc_symbol))])
 role <- data.frame(ensembl_gene_id=proteinInfo$ensembl_gene_id,role=proteinInfo$role)
 missingGenes <- left_join(expr,role)
-head(missingGenes)
+```
+```{r echo=FALSE}
+head(missingGenes) %>%
+kable(format = "html",caption = "Fig 9: Ensembl Genes that did not map to HUGO symbols and their corresponding roles") %>%
+  kable_styling()
 ```
 `r nrow(missingGenes)` Ensembl Gene IDs, or `r nrow(missingGenes)/nrow(expressionAnnotated)*100` percent of expression values, do not map to HUGO symbols.  
 
@@ -270,7 +293,7 @@ normalizedDf <- cbind(ensembl_gene_id = filteredAnnotated$ensembl_gene_id, HUGO 
 ## Recomputing Visalizations
 
   After performing data cleaning and normalization, I'm  going to regenerate the visualizations that I did earlier to see the difference after removing the low counts. 
-```{r normalizedimages,fig.cap="Fig 5: The distribution of the data after normalization and filtering"}
+```{r normalizedimages,fig.cap="Fig 10: The distribution of the data after normalization and filtering"}
 #distribution 
 countDensity <- apply(log2(cpm(normalizedDf[,3:21])), 2, density)
 xlim <- 0; ylim <- 0
@@ -288,14 +311,14 @@ plot(countDensity[[1]],xlim=xlim,ylim=ylim,type="n",
 for (i in 1:length(countDensity)) lines(countDensity[[i]],col=cols[i],lty=ltys[i])
 ```
 
-```{r normboxplot, warning=FALSE,fig.cap="Fig 6: The boxplot of the normalized filtered data"}
+```{r normboxplot, warning=FALSE,fig.cap="Fig 11: The boxplot of the normalized filtered data"}
 #boxplot 
 NewData2Plot <- log2(normalizedDf[3:21])
 
 boxplot(NewData2Plot,las=2)
 ```
 
-```{r normBCV,fig.cap="Fig 7: The clustering of the normalized filtered data"}
+```{r normBCV,fig.cap="Fig 12: The clustering of the normalized filtered data"}
 matrix = as.matrix(normalizedDf[,3:21])
 rownames(matrix) <- normalizedDf$ensembl_gene_id
 
@@ -306,7 +329,7 @@ counts <- cpm(list)
 plotMDS(list,labels = rownames(samples),
         col = c("red","blue")[factor(samples$group)])
 ```
-```{r, fig.cap="Fig 8: The BCV plot demonstrating the variance in the data after filtering and normalization"}
+```{r, fig.cap="Fig 13: The BCV plot demonstrating the variance in the data after filtering and normalization"}
 #BCV
 ModelDesign <- model.matrix(~samples$group)
 d <- estimateDisp(list,ModelDesign)
@@ -322,15 +345,26 @@ identical(filteredAnnotated[2:20],normalizedDf[3:21])
   
 # Creating the Final Dataset
 
-  For now, I will be removing the Ensembl gene rows that do not have a unique HUGO gene symbol. The final dataset that is displayed is the normalized gene expression across all samples, with the rownames being the corresponding HUGO symbol.  
+  For now, I will be removing the Ensembl gene rows that do not have a unique HUGO gene symbol. The final dataset that is displayed is the normalized gene expression across all samples, with the rownames being the corresponding HUGO symbol. The expression for the genes that do not map to HUGO symbols will stay in missingGenes. 
 ```{r final}
 #rownames(normalizedDf) = normalizedAnnotated$hgnc_symbol
 normalizedAnnotated <- normalizedDf[-which(is.na(normalizedDf$HUGO)),]
 symbols <- normalizedAnnotated$HUGO
 rownames(normalizedAnnotated) <- symbols
 normalizedAnnotated <- subset(normalizedAnnotated,select = -c(HUGO,ensembl_gene_id))
-normalizedAnnotated[1:10,1:7]
+missingGenes <- subset(left_join(missingGenes,normalizedDf),select=-c(HUGO))
 dim(normalizedAnnotated)
+```
+```{r echo=FALSE}
+normalizedAnnotated[1:10,1:7] %>%
+kable(format = "html",caption = "Fig 14: The final dataframe") %>%
+  kable_styling()
+```
+```{r echo=FALSE}
+missingGenes[1:10,1:7] %>%
+kable(format = "html",caption = "Fig 15: The dataframe with genes that did not map to HUGO symbols") %>%
+  kable_styling()
+saveRDS(normalizedAnnotated,file = "./data/normalized_counts.rds")
 ```
 # Interpretation 
 
